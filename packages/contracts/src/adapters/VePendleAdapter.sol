@@ -53,6 +53,9 @@ contract VePendleAdapter is
     address public harvester;          // allowed caller for harvest()
     address public voterRouter;        // allowed caller for vote()
 
+    // Pendle Protocol Contracts (Ethereum mainnet)
+    // PENDLE Token: 0x808507121B80c02388fAd14726482e061B8da827
+    // vePENDLE (VotingEscrowPendleMainchain): 0x4f30A9d41B80ecC5B94306AB4364951AE3170210
     address public pendleVotingEscrow; // vePENDLE locking contract
     address public pendleGaugeController; // Voting contract
     address public pendleFeeDistributor; // Rewards contract

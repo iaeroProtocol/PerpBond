@@ -79,6 +79,23 @@ interface IEvents {
     event AdapterRegistered(address indexed adapter);
     event AdapterUpdated(address indexed adapter);
     event AdapterPaused(address indexed adapter, bool active);
+
+    // ----- Cross-chain bridging -----
+    /// @notice Emitted when a cross-chain bridge is initiated
+    event BridgeInitiated(
+        bytes32 indexed bridgeTxId,
+        uint32 indexed dstChainId,
+        address indexed dstVault,
+        uint256 amount,
+        uint256 fee
+    );
+
+    /// @notice Emitted when a cross-chain bridge is completed (funds received)
+    event BridgeCompleted(
+        bytes32 indexed bridgeTxId,
+        uint32 indexed srcChainId,
+        uint256 amountReceived
+    );
 }
 
 /* /////////////////////////////////////////////////////////////////////////////
