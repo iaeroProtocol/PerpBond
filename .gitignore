@@ -1,0 +1,151 @@
+# Foundry / Forge
+cache/
+out/
+broadcast/
+*.log
+
+# Foundry scripts output
+script/**/*.s.sol.json
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+lib/
+
+# Coverage reports
+coverage/
+lcov.info
+*.lcov
+
+# Gas reports
+.gas-snapshot
+gasreport.txt
+
+# Hardhat (if used alongside Foundry)
+artifacts/
+cache_hardhat/
+typechain/
+typechain-types/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Temporary files
+*.swp
+*.swo
+*.tmp
+*.bak
+*.backup
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+.hypothesis/
+tests/__pycache__/
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# Slither reports
+slither-report.json
+slither.db.json
+
+# Mythril reports
+mythril-report.json
+
+# Certora
+.certora*/
+certora_*
+
+# Python (if using any Python tools)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+ENV/
+env/
+
+# Solidity coverage
+coverage.json
+coverageEnv/
+
+# Deployment artifacts - CAUTION: Review before uncommenting
+# You may want to commit some deployment info but keep sensitive data out
+# deployments/
+# deploy-*.json
+# *-deployment.json
+
+# Private keys - NEVER commit these
+*.key
+*.pem
+private-keys.txt
+mnemonic.txt
+
+# Compiler artifacts
+*.abi
+*.bin
+
+# Remix backup files
+*_flattened.sol
+*_flat.sol
+
+# Ape (if used)
+.build/
+.ape/
+
+# Brownie (if used)
+build/
+reports/
+
+# Next.js
+.next/
+next-env.d.ts
+.vercel
+
+# Build outputs
+dist/
+build/
+
+# Turbo
+.turbo/
+
+# Package manager
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
