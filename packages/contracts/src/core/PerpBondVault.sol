@@ -6,11 +6,11 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 
 import "./AccessRoles.sol";
 import "./ErrorsEvents.sol";
-import "./SafeTransferLib.sol";
-import "./MathLib.sol";
+import "../libs/SafeTransferLib.sol";
+import "../libs/MathLib.sol";
 import "./PerpBondToken.sol";
-import "./AdapterRegistry.sol";
-import "./IStrategyAdapter.sol";
+import "../adapters/AdapterRegistry.sol";
+import "../adapters/IStrategyAdapter.sol";
 
 /**
  * @title PerpBondVault
@@ -25,6 +25,10 @@ contract PerpBondVault is AccessRoles, ErrorsEvents, ReentrancyGuard {
     // Constants
     // -----------------------------------------------------------------------
     uint16 public constant BPS_DENOMINATOR = 10_000;
+
+    // SECURITY FIX C-6: Minimum deployment efficiency (95% = 9500 bps)
+    // If adapter reports less than 95% deployed, revert to prevent losses
+    uint16 public minDeploymentBps = 9500;
 
     // -----------------------------------------------------------------------
     // Core state
@@ -234,6 +238,10 @@ contract PerpBondVault is AccessRoles, ErrorsEvents, ReentrancyGuard {
             usdc.safeTransfer(adapter, desired);
             uint256 deployedThis = IStrategyAdapter(adapter).deposit(desired);
 
+            // SECURITY FIX C-6: Validate minimum deployment efficiency
+            uint256 minExpected = (desired * minDeploymentBps) / BPS_DENOMINATOR;
+            if (deployedThis < minExpected) revert IErrors.SlippageTooHigh();
+
             // Be conservative: if adapter reports less deployed, count that.
             if (deployedThis > desired) deployedThis = desired;
             deployed += deployedThis;
@@ -253,5 +261,32 @@ contract PerpBondVault is AccessRoles, ErrorsEvents, ReentrancyGuard {
     function setRegistry(address newRegistry) external onlyGovernor {
         if (newRegistry == address(0)) revert IErrors.ZeroAddress();
         registry = AdapterRegistry(newRegistry);
+    }
+
+    /// @notice SECURITY FIX C-6: Set minimum deployment efficiency (default 9500 = 95%)
+    function setMinDeploymentBps(uint16 newMin) external onlyGovernor {
+        if (newMin < 9000 || newMin > BPS_DENOMINATOR) revert IErrors.InvalidAmount();
+        minDeploymentBps = newMin;
+    }
+
+    /// @notice SECURITY FIX H-2: Emergency withdrawal from all adapters
+    /// @dev Only Governor or Guardian can trigger. Calls emergencyWithdraw() on all adapters.
+    function emergencyWithdrawAll() external nonReentrant returns (uint256 totalRecovered) {
+        if (msg.sender != governor && msg.sender != guardian) revert IErrors.Unauthorized();
+
+        address[] memory adapters = registry.getActiveAdapters();
+        uint256 n = adapters.length;
+
+        for (uint256 i = 0; i < n; ++i) {
+            try IStrategyAdapter(adapters[i]).emergencyWithdraw() returns (uint256 recovered) {
+                totalRecovered += recovered;
+            } catch {
+                // Continue even if one adapter fails
+                continue;
+            }
+        }
+
+        // Add any idle USDC already in vault
+        totalRecovered += idleUsdc;
     }
 }

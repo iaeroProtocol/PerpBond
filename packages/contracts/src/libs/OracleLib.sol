@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import "./ErrorsEvents.sol";
+import "../core/ErrorsEvents.sol";
 
 /// @notice Minimal Chainlink interface for spot price feeds.
 interface AggregatorV3Interface {

@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
 import "./AccessRoles.sol";
 import "./ErrorsEvents.sol";
-import "./AdapterRegistry.sol";
-import "./IVotingAdapter.sol";
+import "../adapters/AdapterRegistry.sol";
+import "../adapters/IVotingAdapter.sol";
 
 /// @notice Routes governance votes to strategy adapters that implement IVotingAdapter.
-contract VoterRouter is AccessRoles, ErrorsEvents {
+/// @dev SECURITY FIX H-3: Added reentrancy protection
+contract VoterRouter is AccessRoles, ErrorsEvents, ReentrancyGuard {
     AdapterRegistry public registry;
 
     event RegistrySet(address indexed oldRegistry, address indexed newRegistry);
@@ -41,7 +44,8 @@ contract VoterRouter is AccessRoles, ErrorsEvents {
 
     /// @notice Execute a batch of voting intents across adapters.
     /// @dev    Reverts if any adapter is inactive or arrays mismatch.
-    function executeVotes(VoteIntent[] calldata intents) external onlyKeeper whenNotPaused {
+    /// @dev    SECURITY FIX H-3: Added nonReentrant modifier
+    function executeVotes(VoteIntent[] calldata intents) external onlyKeeper whenNotPaused nonReentrant {
         uint256 n = intents.length;
         for (uint256 i = 0; i < n; ++i) {
             VoteIntent calldata v = intents[i];

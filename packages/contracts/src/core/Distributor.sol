@@ -6,10 +6,16 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 import "./AccessRoles.sol";
 import "./ErrorsEvents.sol";
-import "./SafeTransferLib.sol";
-import "./MathLib.sol";
+import "../libs/SafeTransferLib.sol";
+import "../libs/MathLib.sol";
 import "./PerpBondVault.sol";
 import "./PerpBondToken.sol";
+
+/// @notice Minimal interface for Harvester's transfer function (security fix: no infinite approvals)
+interface IHarvester {
+    function transferToDistributor(uint256 amount) external returns (uint256);
+    function usdcBalance() external view returns (uint256);
+}
 
 /**
  * @title Distributor
@@ -43,6 +49,9 @@ contract Distributor is AccessRoles, ErrorsEvents, ReentrancyGuard {
 
     // Epoch counter (next epoch id to write).
     uint256 public currentEpoch;
+
+    // SECURITY FIX C-5: Max epochs to process in a single claim to prevent gas DoS
+    uint256 public constant MAX_EPOCHS_PER_CLAIM = 50;
 
     struct Epoch {
         uint64  timestamp;        // close time
@@ -110,15 +119,14 @@ contract Distributor is AccessRoles, ErrorsEvents, ReentrancyGuard {
     // -----------------------------------------------------------------------
 
     /// @notice Close the current epoch: pull harvested USDC from the harvester, take fee, record distribution.
-    /// @dev    Harvester must have approved the Distributor to transfer USDC before this call if using transferFrom.
+    /// @dev    SECURITY FIX: Uses transferToDistributor() instead of transferFrom to avoid infinite approvals.
     function closeEpoch() external onlyKeeper nonReentrant whenNotPaused {
         uint256 harvested;
         if (harvester != address(0)) {
-            uint256 bal = usdc.balanceOf(harvester);
+            uint256 bal = IHarvester(harvester).usdcBalance();
             if (bal > 0) {
-                // Pull funds in (requires allowance).
-                usdc.safeTransferFrom(harvester, address(this), bal);
-                harvested = bal;
+                // Pull funds via Harvester's permissioned transfer (no approval needed).
+                harvested = IHarvester(harvester).transferToDistributor(bal);
             }
         }
 
@@ -166,6 +174,7 @@ contract Distributor is AccessRoles, ErrorsEvents, ReentrancyGuard {
     // -----------------------------------------------------------------------
 
     /// @notice Return total claimable USDC (6 decimals) for `user` across unclaimed epochs.
+    /// @dev SECURITY FIX C-5: Limited to MAX_EPOCHS_PER_CLAIM to prevent gas DoS
     function claimableUSDC(address user) public view returns (uint256) {
         uint256 start = lastClaimedEpoch[user];
         uint256 end = currentEpoch;
@@ -173,6 +182,11 @@ contract Distributor is AccessRoles, ErrorsEvents, ReentrancyGuard {
 
         uint256 userShares = receipt.balanceOf(user);
         if (userShares == 0) return 0;
+
+        // Cap the number of epochs we process to prevent gas DoS
+        if (end - start > MAX_EPOCHS_PER_CLAIM) {
+            end = start + MAX_EPOCHS_PER_CLAIM;
+        }
 
         // Sum in WAD to keep precision, convert to USDC (6) at the end.
         uint256 sumWad;
@@ -185,14 +199,21 @@ contract Distributor is AccessRoles, ErrorsEvents, ReentrancyGuard {
         return MathLib.wadToUsdc(sumWad);
     }
 
-    /// @notice Claim all available USDC. If the user enabled auto‑compound on the Vault,
+    /// @notice Claim all available USDC (up to MAX_EPOCHS_PER_CLAIM). If the user enabled auto‑compound on the Vault,
     ///         the USDC is deposited back into the Vault for new shares.
+    /// @dev SECURITY FIX C-5: Users must call multiple times if they have > MAX_EPOCHS_PER_CLAIM unclaimed
     function claim() external nonReentrant whenNotPaused returns (uint256 claimed) {
         address user = msg.sender;
 
         claimed = claimableUSDC(user);
-        // Move the user's epoch cursor forward regardless of amount (they did not own shares earlier).
-        lastClaimedEpoch[user] = currentEpoch;
+
+        // SECURITY FIX C-5: Only advance cursor by epochs actually processed
+        uint256 start = lastClaimedEpoch[user];
+        uint256 end = currentEpoch;
+        if (end - start > MAX_EPOCHS_PER_CLAIM) {
+            end = start + MAX_EPOCHS_PER_CLAIM;
+        }
+        lastClaimedEpoch[user] = end;
 
         if (claimed == 0) {
             emit Claimed(user, 0, false);
