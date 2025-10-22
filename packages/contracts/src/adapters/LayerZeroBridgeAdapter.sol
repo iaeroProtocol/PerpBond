@@ -9,6 +9,61 @@ import "../core/ErrorsEvents.sol";
 import "../libs/SafeTransferLib.sol";
 import "./IBridgeAdapter.sol";
 
+/// @notice LayerZero V2 Endpoint Interface
+interface ILayerZeroEndpointV2 {
+    struct MessagingParams {
+        uint32 dstEid;
+        bytes32 receiver;
+        bytes message;
+        bytes options;
+        bool payInLzToken;
+    }
+
+    struct MessagingFee {
+        uint256 nativeFee;
+        uint256 lzTokenFee;
+    }
+
+    struct MessagingReceipt {
+        bytes32 guid;
+        uint64 nonce;
+        MessagingFee fee;
+    }
+
+    /// @notice Send a message to a destination endpoint
+    function send(
+        MessagingParams calldata _params,
+        address _refundAddress
+    ) external payable returns (MessagingReceipt memory receipt);
+
+    /// @notice Quote fee for sending a message
+    function quote(
+        MessagingParams calldata _params,
+        address _sender
+    ) external view returns (MessagingFee memory fee);
+}
+
+/// @notice LayerZero V2 Receiver Interface
+interface ILayerZeroReceiver {
+    struct Origin {
+        uint32 srcEid;
+        bytes32 sender;
+        uint64 nonce;
+    }
+
+    /// @notice Called by LZ Endpoint when a message is received
+    function lzReceive(
+        Origin calldata _origin,
+        bytes32 _guid,
+        bytes calldata _message,
+        address _executor,
+        bytes calldata _extraData
+    ) external payable;
+
+    /// @notice Allows the Endpoint to check if the receiver is willing to accept a message
+    function allowInitializePath(Origin calldata _origin) external view returns (bool);
+}
+
 /**
  * @title LayerZeroBridgeAdapter
  * @notice SECURITY IMPLEMENTATION (C-1): Cross-chain USDC bridging via LayerZero V2
@@ -27,9 +82,10 @@ import "./IBridgeAdapter.sol";
  */
 contract LayerZeroBridgeAdapter is
     AccessRoles,
-    
+
     ReentrancyGuard,
-    IBridgeAdapter
+    IBridgeAdapter,
+    ILayerZeroReceiver
 {
     using SafeTransferLib for IERC20;
 
@@ -48,7 +104,9 @@ contract LayerZeroBridgeAdapter is
     // LayerZero Integration (V2)
     // -----------------------------------------------------------------------
     /// @notice LayerZero Endpoint V2 for cross-chain messaging
-    address public lzEndpoint;
+    /// @dev Mainnet addresses (same across EVM chains):
+    ///      Ethereum, Base, Arbitrum, Optimism, etc: 0x1a44076050125825900e736c501f859c50fE728c
+    ILayerZeroEndpointV2 public lzEndpoint;
 
     /// @notice USDC OFT (Omnichain Fungible Token) adapter if using OFT standard
     /// @dev If zero address, uses native USDC bridging
@@ -104,7 +162,7 @@ contract LayerZeroBridgeAdapter is
 
         vault = vault_;
         usdc = IERC20(usdc_);
-        lzEndpoint = lzEndpoint_;
+        if (lzEndpoint_ != address(0)) lzEndpoint = ILayerZeroEndpointV2(lzEndpoint_);
         usdcOFT = usdcOFT_;
     }
 
@@ -113,8 +171,12 @@ contract LayerZeroBridgeAdapter is
     // -----------------------------------------------------------------------
 
     function setLzEndpoint(address newEndpoint) external onlyGovernor {
-        address old = lzEndpoint;
-        lzEndpoint = newEndpoint;
+        address old = address(lzEndpoint);
+        if (newEndpoint != address(0)) {
+            lzEndpoint = ILayerZeroEndpointV2(newEndpoint);
+        } else {
+            lzEndpoint = ILayerZeroEndpointV2(address(0));
+        }
         emit LzEndpointSet(old, newEndpoint);
     }
 
@@ -182,41 +244,39 @@ contract LayerZeroBridgeAdapter is
             timestamp: uint64(block.timestamp)
         });
 
-        // Execute LayerZero bridge
-        // NOTE: In production, implement actual LayerZero V2 OFT send here
-        // This is a placeholder implementation showing the structure:
-        /*
-        if (usdcOFT != address(0)) {
-            // Use OFT standard
-            usdc.safeApprove(usdcOFT, 0);
-            usdc.safeApprove(usdcOFT, amount);
+        // Execute LayerZero V2 bridge via Endpoint
+        if (address(lzEndpoint) == address(0)) revert IErrors.ZeroAddress();
 
-            bytes memory payload = abi.encode(dstVault, amount);
+        // Encode the message payload with bridge tx ID and destination vault
+        bytes memory message = abi.encode(bridgeTxId, dstVault, amount);
 
-            IOFT(usdcOFT).send{value: msg.value}(
-                SendParam({
-                    dstEid: dstChainId,
-                    to: trustedRemotes[dstChainId],
-                    amountLD: amount,
-                    minAmountLD: amount * 9900 / 10000, // 1% slippage
-                    extraOptions: params,
-                    composeMsg: payload,
-                    oftCmd: ""
-                }),
-                MessagingFee({nativeFee: msg.value, lzTokenFee: 0}),
-                payable(msg.sender)
-            );
-        } else {
-            // Use native USDC bridging or other method
-            revert("OFT not configured");
-        }
-        */
+        // Prepare LayerZero messaging parameters
+        ILayerZeroEndpointV2.MessagingParams memory messagingParams = ILayerZeroEndpointV2.MessagingParams({
+            dstEid: dstChainId,
+            receiver: trustedRemotes[dstChainId],
+            message: message,
+            options: params.length > 0 ? params : _getDefaultOptions(),
+            payInLzToken: false
+        });
 
-        emit BridgeInitiated(bridgeTxId, dstChainId, dstVault, amount, msg.value);
+        // Send via LayerZero endpoint
+        ILayerZeroEndpointV2.MessagingReceipt memory receipt = lzEndpoint.send{value: msg.value}(
+            messagingParams,
+            payable(msg.sender) // refund address
+        );
+
+        emit BridgeInitiated(bridgeTxId, dstChainId, dstVault, amount, receipt.fee.nativeFee);
+    }
+
+    /// @notice Get default LayerZero options (gas limit for execution)
+    function _getDefaultOptions() internal view returns (bytes memory) {
+        // LayerZero V2 options format: type 3 (executor LZ receive option)
+        // Options: [type][gas]
+        return abi.encodePacked(uint16(3), defaultGasLimit);
     }
 
     /**
-     * @notice Estimate fee for bridging
+     * @notice Estimate fee for bridging via LayerZero
      */
     function estimateBridgeFee(
         uint256 amount,
@@ -224,14 +284,25 @@ contract LayerZeroBridgeAdapter is
         bytes calldata params
     ) external view override returns (uint256 nativeFee) {
         if (!supportedChainIds[dstChainId]) return 0;
+        if (address(lzEndpoint) == address(0)) return 0;
+        if (trustedRemotes[dstChainId] == bytes32(0)) return 0;
 
-        // NOTE: In production, query actual LayerZero fee estimation
-        // Placeholder estimation based on gas limit:
-        uint256 gasPrice = block.basefee * 12 / 10; // 120% of base fee
-        nativeFee = defaultGasLimit * gasPrice;
+        // Encode message (same as in bridgeUSDC)
+        bytes32 tempTxId = keccak256(abi.encodePacked(block.timestamp, dstChainId, amount));
+        bytes memory message = abi.encode(tempTxId, address(0), amount);
 
-        // Add 20% buffer for cross-chain execution
-        nativeFee = nativeFee * 120 / 100;
+        // Prepare messaging params
+        ILayerZeroEndpointV2.MessagingParams memory messagingParams = ILayerZeroEndpointV2.MessagingParams({
+            dstEid: dstChainId,
+            receiver: trustedRemotes[dstChainId],
+            message: message,
+            options: params.length > 0 ? params : _getDefaultOptions(),
+            payInLzToken: false
+        });
+
+        // Quote the fee from LayerZero endpoint
+        ILayerZeroEndpointV2.MessagingFee memory fee = lzEndpoint.quote(messagingParams, address(this));
+        nativeFee = fee.nativeFee;
     }
 
     /**
@@ -295,34 +366,53 @@ contract LayerZeroBridgeAdapter is
     /**
      * @notice Receive cross-chain message from LayerZero
      * @dev Called by LZ endpoint when USDC arrives from source chain
-     * @dev In production, implement lzReceive from ILayerZeroReceiver
      */
     function lzReceive(
-        uint32 srcChainId,
-        bytes32 srcAddress,
-        bytes memory payload
-    ) external {
-        // NOTE: In production, implement proper LayerZero V2 receiver
-        // Verify msg.sender is lzEndpoint
-        // Verify srcAddress is trusted remote
-        // Process received USDC and forward to vault
+        Origin calldata _origin,
+        bytes32 _guid,
+        bytes calldata _message,
+        address _executor,
+        bytes calldata _extraData
+    ) external payable override {
+        // CRITICAL: Only LayerZero endpoint can call this
+        if (msg.sender != address(lzEndpoint)) revert IErrors.Unauthorized();
 
-        // Placeholder for structure:
-        /*
-        if (msg.sender != lzEndpoint) revert IErrors.Unauthorized();
-        if (srcAddress != trustedRemotes[srcChainId]) revert IErrors.Unauthorized();
+        // CRITICAL: Only accept messages from trusted remotes
+        if (_origin.sender != trustedRemotes[_origin.srcEid]) revert IErrors.Unauthorized();
 
-        (bytes32 bridgeTxId, uint256 amountReceived) = abi.decode(payload, (bytes32, uint256));
+        // Decode the message payload
+        (bytes32 bridgeTxId, address dstVault, uint256 amount) = abi.decode(_message, (bytes32, address, uint256));
 
+        // Verify the destination vault matches our vault
+        if (dstVault != vault && dstVault != address(0)) revert IErrors.Unauthorized();
+
+        // Check USDC balance to confirm funds arrived
+        uint256 usdcBalance = usdc.balanceOf(address(this));
+        uint256 amountToForward = amount > usdcBalance ? usdcBalance : amount;
+
+        // Update bridge transaction status
         BridgeTransaction storage bridge = bridges[bridgeTxId];
-        bridge.status = 1; // completed
-        bridge.amountReceived = amountReceived;
+        if (bridge.amountSent > 0) {
+            // This is a bridge we initiated - mark as completed
+            bridge.status = 1; // completed
+            bridge.amountReceived = amountToForward;
+        }
 
         // Forward USDC to vault
-        usdc.safeTransfer(vault, amountReceived);
+        if (amountToForward > 0) {
+            usdc.safeTransfer(vault, amountToForward);
+        }
 
-        emit BridgeCompleted(bridgeTxId, srcChainId, amountReceived);
-        */
+        emit BridgeCompleted(bridgeTxId, _origin.srcEid, amountToForward);
+    }
+
+    /**
+     * @notice Check if we're willing to accept a message from this origin
+     * @dev Called by LayerZero endpoint before lzReceive
+     */
+    function allowInitializePath(Origin calldata _origin) external view override returns (bool) {
+        // Accept messages from trusted remotes on supported chains
+        return supportedChainIds[_origin.srcEid] && trustedRemotes[_origin.srcEid] == _origin.sender;
     }
 
     // -----------------------------------------------------------------------

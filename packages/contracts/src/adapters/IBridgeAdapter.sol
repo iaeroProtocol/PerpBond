@@ -13,19 +13,6 @@ interface IBridgeAdapter {
     // -----------------------------------------------------------------------
     // Events
     // -----------------------------------------------------------------------
-    event BridgeInitiated(
-        bytes32 indexed bridgeTxId,
-        uint32 indexed dstChainId,
-        address indexed dstVault,
-        uint256 amount,
-        uint256 nativeFee
-    );
-
-    event BridgeCompleted(
-        bytes32 indexed bridgeTxId,
-        uint32 srcChainId,
-        uint256 amountReceived
-    );
 
     event BridgeFailed(
         bytes32 indexed bridgeTxId,

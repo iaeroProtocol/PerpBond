@@ -32,11 +32,10 @@ import "../interfaces/external/IPendleVoting.sol";
  */
 contract VePendleAdapter is
     AccessRoles,
-    
     ReentrancyGuard,
     IStrategyAdapter,
-    ILockingAdapter,
-    IVotingAdapter
+    IVotingAdapter,
+    ILockingAdapter
 {
     using SafeTransferLib for IERC20;
 
@@ -58,6 +57,12 @@ contract VePendleAdapter is
     IPendleVotingEscrow public pendleVotingEscrow; // vePENDLE locking contract
     IPendleGaugeController public pendleGaugeController; // Voting contract
     IPendleFeeDistributor public pendleFeeDistributor; // Rewards contract
+    // Pendle Protocol Contracts (Ethereum mainnet)
+    // PENDLE Token: 0x808507121B80c02388fAd14726482e061B8da827
+    // vePENDLE (VotingEscrowPendleMainchain): 0x4f30A9d41B80ecC5B94306AB4364951AE3170210
+    address public pendleVotingEscrow; // vePENDLE locking contract
+    address public pendleGaugeController; // Voting contract
+    address public pendleFeeDistributor; // Rewards contract
 
     // -----------------------------------------------------------------------
     // State
