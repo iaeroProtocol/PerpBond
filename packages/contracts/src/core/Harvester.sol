@@ -6,10 +6,10 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 import "./AccessRoles.sol";
 import "./ErrorsEvents.sol";
-import "./SafeTransferLib.sol";
-import "./AdapterRegistry.sol";
+import "../libs/SafeTransferLib.sol";
+import "../adapters/AdapterRegistry.sol";
 import "./PerpBondVault.sol";
-import "./IStrategyAdapter.sol";
+import "../adapters/IStrategyAdapter.sol";
 
 /// @notice Minimal interface for a pluggable swapper that converts reward tokens to USDC.
 interface IRewardSwapper {
@@ -71,9 +71,7 @@ contract Harvester is AccessRoles, ErrorsEvents, ReentrancyGuard {
 
         if (distributor_ != address(0)) {
             distributor = distributor_;
-            // Pre-approve Distributor to pull USDC (Distributor uses transferFrom during closeEpoch).
-            usdc.safeApprove(distributor_, 0);
-            usdc.safeApprove(distributor_, type(uint256).max);
+            // SECURITY FIX: Removed infinite approval. Distributor now calls transferToDistributor() instead.
         }
     }
 
@@ -95,16 +93,23 @@ contract Harvester is AccessRoles, ErrorsEvents, ReentrancyGuard {
 
     function setDistributor(address newDistributor) external onlyGovernor {
         address old = distributor;
-
-        // Clear old allowance, set new max allowance.
-        if (old != address(0)) usdc.safeApprove(old, 0);
         distributor = newDistributor;
-        if (newDistributor != address(0)) {
-            usdc.safeApprove(newDistributor, 0);
-            usdc.safeApprove(newDistributor, type(uint256).max);
-        }
-
+        // SECURITY FIX: No more infinite approvals
         emit DistributorSet(old, newDistributor);
+    }
+
+    /// @notice SECURITY FIX: Distributor calls this instead of using transferFrom with infinite approval
+    /// @dev Only callable by the configured distributor
+    function transferToDistributor(uint256 amount) external nonReentrant returns (uint256) {
+        if (msg.sender != distributor) revert IErrors.Unauthorized();
+        if (amount == 0) return 0;
+
+        uint256 bal = usdc.balanceOf(address(this));
+        if (amount > bal) amount = bal;
+        if (amount == 0) return 0;
+
+        usdc.safeTransfer(distributor, amount);
+        return amount;
     }
 
     /// @notice Set/clear a swapper for a given reward token (zero to unset).

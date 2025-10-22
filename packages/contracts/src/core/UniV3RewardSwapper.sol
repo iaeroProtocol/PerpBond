@@ -6,7 +6,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 import "./AccessRoles.sol";
 import "./ErrorsEvents.sol";
-import "./SafeTransferLib.sol";
+import "../libs/SafeTransferLib.sol";
 
 /// @notice Minimal Uniswap v3 router interface (exactInput / exactInputSingle).
 interface ISwapRouterV3 {
@@ -63,6 +63,9 @@ contract UniV3RewardSwapper is AccessRoles, ErrorsEvents, ReentrancyGuard {
     mapping(address => uint24) public feeFor;        // token => pool fee for direct pool
     mapping(address => bytes)  public pathFor;       // token => encoded multi-hop path to USDC
 
+    /// @notice SECURITY FIX: Deadline offset in seconds to prevent MEV/sandwiching (default 30 min)
+    uint256 public deadlineOffset = 1800; // 30 minutes
+
     // -----------------------------------------------------------------------
     // Events
     // -----------------------------------------------------------------------
@@ -114,6 +117,13 @@ contract UniV3RewardSwapper is AccessRoles, ErrorsEvents, ReentrancyGuard {
         emit PathSet(token, path);
     }
 
+    /// @notice Set the deadline offset for swap transactions (SECURITY: prevents MEV)
+    /// @param offset Seconds from block.timestamp (e.g., 1800 = 30 min, max 3600 = 1 hour)
+    function setDeadlineOffset(uint256 offset) external onlyGovernor {
+        if (offset == 0 || offset > 3600) revert IErrors.InvalidAmount();
+        deadlineOffset = offset;
+    }
+
     /// @notice Rescue any token accidentally stuck in the swapper.
     function rescueToken(address token, address to, uint256 amount) external onlyGovernor {
         if (token == address(0) || to == address(0)) revert IErrors.ZeroAddress();
@@ -146,13 +156,16 @@ contract UniV3RewardSwapper is AccessRoles, ErrorsEvents, ReentrancyGuard {
         IERC20(token).safeApprove(address(router), 0);
         IERC20(token).safeApprove(address(router), amountIn);
 
+        // SECURITY FIX: Use deadline offset instead of block.timestamp for MEV protection
+        uint256 deadline = block.timestamp + deadlineOffset;
+
         bytes memory path = pathFor[token];
         if (path.length > 0) {
             // Multi-hop: token -> ... -> USDC
             ISwapRouterV3.ExactInputParams memory p = ISwapRouterV3.ExactInputParams({
                 path: path,
                 recipient: recipient,
-                deadline: block.timestamp,
+                deadline: deadline,
                 amountIn: amountIn,
                 amountOutMinimum: minUsdcOut
             });
@@ -166,7 +179,7 @@ contract UniV3RewardSwapper is AccessRoles, ErrorsEvents, ReentrancyGuard {
                 tokenOut: address(usdc),
                 fee: fee,
                 recipient: recipient,
-                deadline: block.timestamp,
+                deadline: deadline,
                 amountIn: amountIn,
                 amountOutMinimum: minUsdcOut,
                 sqrtPriceLimitX96: 0

@@ -4,12 +4,12 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import "./AccessRoles.sol";
-import "./ErrorsEvents.sol";
-import "./SafeTransferLib.sol";
+import "../core/AccessRoles.sol";
+import "../core/ErrorsEvents.sol";
+import "../libs/SafeTransferLib.sol";
 import "./IStrategyAdapter.sol";
 import "./IVotingAdapter.sol";
-import "./RouterGuard.sol";
+import "../core/RouterGuard.sol";
 
 interface ISwapRouterV3 {
     struct ExactInputSingleParams {

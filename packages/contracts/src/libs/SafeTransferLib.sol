@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 
-import "./ErrorsEvents.sol"; // for IErrors
+import "../core/ErrorsEvents.sol"; // for IErrors
 
 /// @title SafeTransferLib
 /// @notice Safe ERC-20 transfers/approvals compatible with non-standard tokens (e.g., USDT)
