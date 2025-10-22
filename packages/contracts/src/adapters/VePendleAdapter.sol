@@ -10,6 +10,8 @@ import "../libs/SafeTransferLib.sol";
 import "./IStrategyAdapter.sol";
 import "./ILockingAdapter.sol";
 import "./IVotingAdapter.sol";
+import "../core/RouterGuard.sol";
+import "../interfaces/external/IPendleVoting.sol";
 
 /**
  * @title VePendleAdapter
@@ -48,10 +50,13 @@ contract VePendleAdapter is
     // External Contracts
     // -----------------------------------------------------------------------
     address public swapRouter;         // Uniswap V3 router for USDC→PENDLE
-    address public guard;              // RouterGuard for oracle validation
+    RouterGuard public guard;          // RouterGuard for oracle validation
     address public harvester;          // allowed caller for harvest()
     address public voterRouter;        // allowed caller for vote()
 
+    IPendleVotingEscrow public pendleVotingEscrow; // vePENDLE locking contract
+    IPendleGaugeController public pendleGaugeController; // Voting contract
+    IPendleFeeDistributor public pendleFeeDistributor; // Rewards contract
     // Pendle Protocol Contracts (Ethereum mainnet)
     // PENDLE Token: 0x808507121B80c02388fAd14726482e061B8da827
     // vePENDLE (VotingEscrowPendleMainchain): 0x4f30A9d41B80ecC5B94306AB4364951AE3170210
@@ -69,8 +74,13 @@ contract VePendleAdapter is
     // Events
     // -----------------------------------------------------------------------
     event PendleLocked(uint256 amount, uint256 expiryTimestamp);
+    event PendleAmountIncreased(uint256 amount);
     event RewardsClaimed(uint256 usdcValue);
     event LockExtended(uint256 newExpiry);
+    event VoteCast(address[] gauges, uint256[] weights);
+    event PendleContractsSet(address votingEscrow, address gaugeController, address feeDistributor);
+    event SwapRouterSet(address indexed router);
+    event GuardSet(address indexed guard);
 
     // -----------------------------------------------------------------------
     // Constructor
@@ -99,10 +109,12 @@ contract VePendleAdapter is
 
     function setSwapRouter(address newRouter) external onlyGovernor {
         swapRouter = newRouter;
+        emit SwapRouterSet(newRouter);
     }
 
     function setGuard(address newGuard) external onlyGovernor {
-        guard = newGuard;
+        guard = RouterGuard(newGuard);
+        emit GuardSet(newGuard);
     }
 
     function setHarvester(address newHarvester) external onlyGovernor {
@@ -118,9 +130,10 @@ contract VePendleAdapter is
         address gaugeController_,
         address feeDistributor_
     ) external onlyGovernor {
-        pendleVotingEscrow = votingEscrow_;
-        pendleGaugeController = gaugeController_;
-        pendleFeeDistributor = feeDistributor_;
+        if (votingEscrow_ != address(0)) pendleVotingEscrow = IPendleVotingEscrow(votingEscrow_);
+        if (gaugeController_ != address(0)) pendleGaugeController = IPendleGaugeController(gaugeController_);
+        if (feeDistributor_ != address(0)) pendleFeeDistributor = IPendleFeeDistributor(feeDistributor_);
+        emit PendleContractsSet(votingEscrow_, gaugeController_, feeDistributor_);
     }
 
     function setLockDuration(uint256 newDuration) external onlyGovernor {
@@ -257,19 +270,120 @@ contract VePendleAdapter is
 
     /**
      * @notice Vote on Pendle gauges with vePENDLE voting power
+     * @param gauges Array of gauge addresses to vote for
+     * @param weights Array of weights (in basis points, max 10000 per gauge)
      */
     function vote(address[] calldata gauges, uint256[] calldata weights) external override {
         if (msg.sender != voterRouter && msg.sender != keeper) revert IErrors.Unauthorized();
         if (gauges.length != weights.length) revert IErrors.InvalidAmount();
+        if (address(pendleGaugeController) == address(0)) revert IErrors.ZeroAddress();
 
-        // NOTE: In production, implement Pendle gauge voting
-        /*
-        if (pendleGaugeController != address(0)) {
-            for (uint256 i = 0; i < gauges.length; i++) {
-                IGaugeController(pendleGaugeController).vote_for_gauge_weights(gauges[i], weights[i]);
-            }
+        // Vote on each gauge with the specified weight
+        for (uint256 i = 0; i < gauges.length; i++) {
+            pendleGaugeController.vote_for_gauge_weights(gauges[i], weights[i]);
         }
-        */
+
+        emit VoteCast(gauges, weights);
+    }
+
+    // -----------------------------------------------------------------------
+    // vePENDLE Operations
+    // -----------------------------------------------------------------------
+
+    /**
+     * @notice Create a new vePENDLE lock
+     * @param amount Amount of PENDLE to lock
+     * @param unlockTime Unix timestamp when lock expires (must be rounded to weeks, max 2 years)
+     */
+    function createLock(uint256 amount, uint128 unlockTime) external onlyKeeper whenNotPaused nonReentrant {
+        if (amount == 0) revert IErrors.InvalidAmount();
+        if (address(pendleVotingEscrow) == address(0)) revert IErrors.ZeroAddress();
+
+        uint256 pendleBal = pendle.balanceOf(address(this));
+        if (amount > pendleBal) amount = pendleBal;
+
+        pendle.safeApprove(address(pendleVotingEscrow), 0);
+        pendle.safeApprove(address(pendleVotingEscrow), amount);
+
+        pendleVotingEscrow.create_lock(amount, unlockTime);
+        lockExpiryTimestamp = unlockTime;
+
+        emit PendleLocked(amount, unlockTime);
+    }
+
+    /**
+     * @notice Increase the amount locked in vePENDLE
+     * @param amount Additional PENDLE to lock
+     */
+    function increaseAmount(uint256 amount) external onlyKeeper whenNotPaused nonReentrant {
+        if (amount == 0) revert IErrors.InvalidAmount();
+        if (address(pendleVotingEscrow) == address(0)) revert IErrors.ZeroAddress();
+
+        uint256 pendleBal = pendle.balanceOf(address(this));
+        if (amount > pendleBal) amount = pendleBal;
+
+        pendle.safeApprove(address(pendleVotingEscrow), 0);
+        pendle.safeApprove(address(pendleVotingEscrow), amount);
+
+        pendleVotingEscrow.increase_amount(amount);
+
+        emit PendleAmountIncreased(amount);
+    }
+
+    /**
+     * @notice Extend the unlock time for vePENDLE
+     * @param newUnlockTime New unlock timestamp (must be > current, rounded to weeks)
+     */
+    function increaseUnlockTime(uint128 newUnlockTime) external onlyKeeper whenNotPaused nonReentrant {
+        if (address(pendleVotingEscrow) == address(0)) revert IErrors.ZeroAddress();
+        if (newUnlockTime <= lockExpiryTimestamp) revert IErrors.InvalidAmount();
+
+        pendleVotingEscrow.increase_unlock_time(newUnlockTime);
+        lockExpiryTimestamp = newUnlockTime;
+
+        emit LockExtended(newUnlockTime);
+    }
+
+    /**
+     * @notice Withdraw from an expired vePENDLE lock
+     */
+    function withdrawLock() external onlyKeeper nonReentrant {
+        if (address(pendleVotingEscrow) == address(0)) revert IErrors.ZeroAddress();
+        if (block.timestamp < lockExpiryTimestamp) revert IErrors.InvalidAmount(); // Lock not expired
+
+        pendleVotingEscrow.withdraw();
+        lockExpiryTimestamp = 0;
+    }
+
+    /**
+     * @notice Claim vePENDLE rewards from fee distributor
+     */
+    function claimRewards() external onlyKeeper whenNotPaused nonReentrant returns (uint256 claimed) {
+        if (address(pendleFeeDistributor) == address(0)) revert IErrors.ZeroAddress();
+
+        claimed = pendleFeeDistributor.claim(address(this));
+        emit RewardsClaimed(claimed);
+    }
+
+    /**
+     * @notice Get locked balance information
+     * @return amount Locked amount
+     * @return expiry Lock expiry timestamp
+     */
+    function getLockedBalance() external view returns (uint128 amount, uint128 expiry) {
+        if (address(pendleVotingEscrow) == address(0)) return (0, 0);
+
+        IPendleVotingEscrow.LockedBalance memory locked = pendleVotingEscrow.locked(address(this));
+        return (locked.amount, locked.expiry);
+    }
+
+    /**
+     * @notice Get voting power balance
+     * @return Voting power
+     */
+    function getVotingPower() external view returns (uint256) {
+        if (address(pendleVotingEscrow) == address(0)) return 0;
+        return pendleVotingEscrow.balanceOf(address(this));
     }
 
     // -----------------------------------------------------------------------
