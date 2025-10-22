@@ -54,13 +54,12 @@ contract VlCvxAdapter is
     address public harvester;          // allowed caller for harvest()
     address public voterRouter;        // allowed caller for vote()
 
-    ICvxLocker public cvxLocker;       // CvxLockerV2 (vlCVX locking contract)
-    ICvxVoteProxy public voteProxy;    // Convex vote proxy for gauge voting
     // Convex Finance Contracts (Ethereum mainnet)
     // CVX Token: 0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B
     // CvxLockerV2 (vlCVX): 0x72a19342e8F1838460eBFCCEf09F6585e32db86E
     // cvxCRV Rewards: 0x3Fe65692bfCD0e6CF84cB1E7d24108E434A7587e
-    address public cvxLocker;          // CvxLockerV2 (vlCVX locking contract)
+    ICvxLocker public cvxLocker;       // CvxLockerV2 (vlCVX locking contract)
+    ICvxVoteProxy public voteProxy;    // Convex vote proxy for gauge voting
     address public cvxRewardPool;      // cvxCRV rewards pool
     address public cvxCrv;             // cvxCRV token
 
