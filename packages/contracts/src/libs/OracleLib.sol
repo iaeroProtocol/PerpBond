@@ -96,6 +96,8 @@ library OracleLib {
         }
 
         uint8 pDec = agg.decimals(); // feed decimals (commonly 8)
+        require(answer > 0, "Oracle: negative price");
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint256 price = uint256(answer);
 
         // Normalize price to 1e18
