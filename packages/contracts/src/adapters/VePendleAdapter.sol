@@ -30,7 +30,7 @@ import "./IVotingAdapter.sol";
  */
 contract VePendleAdapter is
     AccessRoles,
-    ErrorsEvents,
+    
     ReentrancyGuard,
     IStrategyAdapter,
     ILockingAdapter,

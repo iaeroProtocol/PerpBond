@@ -31,7 +31,7 @@ interface IRewardSwapper {
  * @notice Orchestrates reward harvesting from adapters and converts rewards to USDC.
  *         Distributor later pulls USDC from this contract to close epochs.
  */
-contract Harvester is AccessRoles, ErrorsEvents, ReentrancyGuard {
+contract Harvester is AccessRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
 
     // Core contracts

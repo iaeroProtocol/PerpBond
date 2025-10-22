@@ -27,7 +27,7 @@ import "./IBridgeAdapter.sol";
  */
 contract LayerZeroBridgeAdapter is
     AccessRoles,
-    ErrorsEvents,
+    
     ReentrancyGuard,
     IBridgeAdapter
 {

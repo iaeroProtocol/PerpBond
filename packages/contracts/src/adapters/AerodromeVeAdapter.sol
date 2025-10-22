@@ -38,7 +38,7 @@ interface ISwapRouterV3 {
 ///         exposes harvest/vote hooks (no-op for now), and keeper utilities to convert/unwind.
 contract AerodromeVeAdapter is
     AccessRoles,
-    ErrorsEvents,
+    
     ReentrancyGuard,
     IStrategyAdapter,
     IVotingAdapter

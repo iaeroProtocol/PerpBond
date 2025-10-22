@@ -2,12 +2,12 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import {AdapterRegistry} from "../contracts/AdapterRegistry.sol";
-import {PerpBondVault} from "../contracts/PerpBondVault.sol";
-import {RouterGuard} from "../contracts/RouterGuard.sol";
-import {Harvester} from "../contracts/Harvester.sol";
-import {Distributor} from "../contracts/Distributor.sol";
-import {AerodromeVeAdapter} from "../contracts/AerodromeVeAdapter.sol";
+import {AdapterRegistry} from "../src/adapters/AdapterRegistry.sol";
+import {PerpBondVault} from "../src/core/PerpBondVault.sol";
+import {RouterGuard} from "../src/core/RouterGuard.sol";
+import {Harvester} from "../src/core/Harvester.sol";
+import {Distributor} from "../src/core/Distributor.sol";
+import {AerodromeVeAdapter} from "../src/adapters/AerodromeVeAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract ConfigurePerpBondBase is Script {
@@ -89,10 +89,12 @@ contract ConfigurePerpBondBase is Script {
         registry.setAdapterActive(ADAPT, true);
 
         // 3) Vault: set 100% target allocation to this adapter
-        address;
+        address[] memory adapters = new address[](1);
         adapters[0] = ADAPT;
-        uint16;
+
+        uint16[] memory bps = new uint16[](1);
         bps[0] = 10_000;
+
         vault.setTargetAllocations(adapters, bps);
 
         // 4) Adapter: plug router/guard + routes (USDC→WETH→AERO, and back)

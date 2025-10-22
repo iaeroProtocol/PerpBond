@@ -10,7 +10,7 @@ import "../adapters/IVotingAdapter.sol";
 
 /// @notice Routes governance votes to strategy adapters that implement IVotingAdapter.
 /// @dev SECURITY FIX H-3: Added reentrancy protection
-contract VoterRouter is AccessRoles, ErrorsEvents, ReentrancyGuard {
+contract VoterRouter is AccessRoles, ReentrancyGuard {
     AdapterRegistry public registry;
 
     event RegistrySet(address indexed oldRegistry, address indexed newRegistry);

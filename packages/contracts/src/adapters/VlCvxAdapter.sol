@@ -30,7 +30,7 @@ import "./IVotingAdapter.sol";
  */
 contract VlCvxAdapter is
     AccessRoles,
-    ErrorsEvents,
+    
     ReentrancyGuard,
     IStrategyAdapter,
     ILockingAdapter,

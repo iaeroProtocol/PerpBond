@@ -13,7 +13,7 @@ pragma solidity ^0.8.24;
  *   both interfaces) so you can `emit Deposit(...)` etc. without namespacing.
  *
  * Example usage:
- *   import { ErrorsEvents, IErrors } from "./ErrorsEvents.sol";
+ *   import {  IErrors } from "./ErrorsEvents.sol";
  *
  *   contract PerpBondVault is ErrorsEvents {
  *     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {

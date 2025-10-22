@@ -11,7 +11,7 @@ import "../libs/OracleLib.sol";
  * @dev    Configure Chainlink feeds for each token (token->USD) and a staleness window.
  *         Consumers (e.g., Harvester) should call validateSwap() before swapping.
  */
-contract RouterGuard is AccessRoles, ErrorsEvents {
+contract RouterGuard is AccessRoles {
     uint16 public constant BPS_DENOMINATOR = 10_000;
 
     // router => allowed

@@ -18,7 +18,7 @@ import "../adapters/IStrategyAdapter.sol";
  *         deployed across active adapters per governor-set target allocations.
  *         Distributor reads users' auto-compound preference via autoCompoundOf().
  */
-contract PerpBondVault is AccessRoles, ErrorsEvents, ReentrancyGuard {
+contract PerpBondVault is AccessRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
 
     // -----------------------------------------------------------------------

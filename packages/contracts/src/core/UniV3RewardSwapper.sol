@@ -47,7 +47,7 @@ interface ISwapRouterV3 {
  *         - Supports direct pools (exactInputSingle) or multi-hop paths (exactInput).
  *         - Uses SafeTransferLib for robust approvals and transfers.
  */
-contract UniV3RewardSwapper is AccessRoles, ErrorsEvents, ReentrancyGuard {
+contract UniV3RewardSwapper is AccessRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
 
     // -----------------------------------------------------------------------

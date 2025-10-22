@@ -33,7 +33,7 @@ library MathLib {
 
     /// @notice ceil(x * y / d).
     function mulDivUp(uint256 x, uint256 y, uint256 d) internal pure returns (uint256) {
-        return Math.mulDiv(x, y, d, Math.Rounding.Up);
+        return Math.mulDiv(x, y, d, Math.Rounding.Ceil);
     }
 
     /*//////////////////////////////////////////////////////////////

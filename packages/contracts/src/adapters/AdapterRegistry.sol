@@ -19,7 +19,7 @@ import "../core/ErrorsEvents.sol";
  *  - maxSlippageBpsOnSwap: per-adapter swap slippage limit (0..10000)
  *  - oracleConfig: opaque bytes for price/oracle configuration (used by OracleLib)
  */
-contract AdapterRegistry is AccessRoles, ErrorsEvents {
+contract AdapterRegistry is AccessRoles {
     // -----------------------------------------------------------------------
     // Constants
     // -----------------------------------------------------------------------

@@ -28,7 +28,7 @@ interface IHarvester {
  *   transfer‑aware (i.e., it does not snapshot balances at each epoch). Good for MVP; upgrade later
  *   if you need exact epoch snapshots. :contentReference[oaicite:3]{index=3}
  */
-contract Distributor is AccessRoles, ErrorsEvents, ReentrancyGuard {
+contract Distributor is AccessRoles, ReentrancyGuard {
     using SafeTransferLib for IERC20;
 
     // -----------------------------------------------------------------------
