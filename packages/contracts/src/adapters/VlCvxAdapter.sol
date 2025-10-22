@@ -10,6 +10,8 @@ import "../libs/SafeTransferLib.sol";
 import "./IStrategyAdapter.sol";
 import "./ILockingAdapter.sol";
 import "./IVotingAdapter.sol";
+import "../core/RouterGuard.sol";
+import "../interfaces/external/IConvexVoting.sol";
 
 /**
  * @title VlCvxAdapter
@@ -49,11 +51,12 @@ contract VlCvxAdapter is
     // External Contracts
     // -----------------------------------------------------------------------
     address public swapRouter;         // Uniswap V3 router for USDC→CVX
-    address public guard;              // RouterGuard for oracle validation
+    RouterGuard public guard;          // RouterGuard for oracle validation
     address public harvester;          // allowed caller for harvest()
     address public voterRouter;        // allowed caller for vote()
 
-    address public cvxLocker;          // CvxLockerV2 (vlCVX locking contract)
+    ICvxLocker public cvxLocker;       // CvxLockerV2 (vlCVX locking contract)
+    ICvxVoteProxy public voteProxy;    // Convex vote proxy for gauge voting
     address public cvxRewardPool;      // cvxCRV rewards pool
     address public cvxCrv;             // cvxCRV token
 
@@ -68,7 +71,11 @@ contract VlCvxAdapter is
     // -----------------------------------------------------------------------
     event CvxLocked(uint256 amount, uint256 lockEpoch);
     event RewardsClaimed(uint256[] amounts, address[] tokens);
-    event VoteCast(bytes32 indexed voteHash, uint256 weight);
+    event VoteCast(address[] gauges, uint256[] weights);
+    event ExpiredLocksProcessed(bool relocked);
+    event ConvexContractsSet(address cvxLocker, address voteProxy, address cvxRewardPool, address cvxCrv);
+    event SwapRouterSet(address indexed router);
+    event GuardSet(address indexed guard);
 
     // -----------------------------------------------------------------------
     // Constructor
@@ -97,10 +104,12 @@ contract VlCvxAdapter is
 
     function setSwapRouter(address newRouter) external onlyGovernor {
         swapRouter = newRouter;
+        emit SwapRouterSet(newRouter);
     }
 
     function setGuard(address newGuard) external onlyGovernor {
-        guard = newGuard;
+        guard = RouterGuard(newGuard);
+        emit GuardSet(newGuard);
     }
 
     function setHarvester(address newHarvester) external onlyGovernor {
@@ -113,12 +122,15 @@ contract VlCvxAdapter is
 
     function setConvexContracts(
         address cvxLocker_,
+        address voteProxy_,
         address cvxRewardPool_,
         address cvxCrv_
     ) external onlyGovernor {
-        cvxLocker = cvxLocker_;
+        if (cvxLocker_ != address(0)) cvxLocker = ICvxLocker(cvxLocker_);
+        if (voteProxy_ != address(0)) voteProxy = ICvxVoteProxy(voteProxy_);
         cvxRewardPool = cvxRewardPool_;
         cvxCrv = cvxCrv_;
+        emit ConvexContractsSet(cvxLocker_, voteProxy_, cvxRewardPool_, cvxCrv_);
     }
 
     // -----------------------------------------------------------------------
@@ -273,46 +285,145 @@ contract VlCvxAdapter is
     // -----------------------------------------------------------------------
 
     /**
-     * @notice Vote on Convex gauges with vlCVX voting power
-     * @dev Convex uses Snapshot for off-chain voting or on-chain gauge votes
+     * @notice Vote on Convex/Curve gauges with vlCVX voting power
+     * @dev Convex uses a vote proxy to vote on Curve gauges
+     * @param gauges Array of gauge addresses to vote for
+     * @param weights Array of weights to allocate to each gauge
      */
     function vote(address[] calldata gauges, uint256[] calldata weights) external override {
         if (msg.sender != voterRouter && msg.sender != keeper) revert IErrors.Unauthorized();
         if (gauges.length != weights.length) revert IErrors.InvalidAmount();
 
-        // NOTE: In production, implement Convex gauge voting
-        // Convex may use on-chain voting or Snapshot
-        /*
-        bytes32 voteHash = keccak256(abi.encodePacked(gauges, weights, block.timestamp));
-
-        // For on-chain voting (if available):
-        if (cvxLocker != address(0)) {
-            for (uint256 i = 0; i < gauges.length; i++) {
-                // Cast vote for gauge with weight
-                // Implementation depends on Convex voting contract
-            }
+        // Use vote proxy if available (for on-chain voting)
+        if (address(voteProxy) != address(0)) {
+            voteProxy.voteMultipleGauges(gauges, weights);
         }
+        // If no vote proxy, voting may be done through Snapshot (off-chain)
+        // In that case, this function just emits an event for off-chain indexing
 
-        emit VoteCast(voteHash, getTotalWeight(weights));
-        */
+        emit VoteCast(gauges, weights);
     }
 
     // -----------------------------------------------------------------------
-    // Helpers
+    // vlCVX Operations
     // -----------------------------------------------------------------------
 
     /**
-     * @notice Relock expired CVX for continued voting power
-     * @dev Call periodically to maintain position
+     * @notice Lock CVX tokens to receive vlCVX
+     * @param amount Amount of CVX to lock
+     * @param spendRatio Boost spending ratio (0 = no boost, higher = more boost)
      */
-    function relockExpiredCvx() external onlyKeeper nonReentrant whenNotPaused {
-        // NOTE: In production, process expired locks and re-lock
-        /*
-        if (cvxLocker != address(0)) {
-            ICvxLocker(cvxLocker).processExpiredLocks(true); // relock = true
+    function lockCvx(uint256 amount, uint256 spendRatio) external onlyKeeper whenNotPaused nonReentrant {
+        if (amount == 0) revert IErrors.InvalidAmount();
+        if (address(cvxLocker) == address(0)) revert IErrors.ZeroAddress();
+
+        uint256 cvxBal = cvx.balanceOf(address(this));
+        if (amount > cvxBal) amount = cvxBal;
+
+        cvx.safeApprove(address(cvxLocker), 0);
+        cvx.safeApprove(address(cvxLocker), amount);
+
+        cvxLocker.lock(address(this), amount, spendRatio);
+        lockEpoch = cvxLocker.epochCount();
+        nextUnlockTimestamp = block.timestamp + 16 weeks;
+
+        emit CvxLocked(amount, lockEpoch);
+    }
+
+    /**
+     * @notice Process expired locks and optionally relock
+     * @param relock If true, relock the expired CVX for continued voting power
+     */
+    function processExpiredLocks(bool relock) external onlyKeeper nonReentrant {
+        if (address(cvxLocker) == address(0)) revert IErrors.ZeroAddress();
+
+        cvxLocker.processExpiredLocks(relock);
+
+        if (relock) {
             nextUnlockTimestamp = block.timestamp + 16 weeks;
         }
-        */
+
+        emit ExpiredLocksProcessed(relock);
+    }
+
+    /**
+     * @notice Relock expired CVX for continued voting power
+     * @dev Convenience function that calls processExpiredLocks(true)
+     */
+    function relockExpiredCvx() external onlyKeeper nonReentrant whenNotPaused {
+        if (address(cvxLocker) == address(0)) revert IErrors.ZeroAddress();
+
+        cvxLocker.processExpiredLocks(true); // relock = true
+        nextUnlockTimestamp = block.timestamp + 16 weeks;
+
+        emit ExpiredLocksProcessed(true);
+    }
+
+    /**
+     * @notice Claim all vlCVX rewards (cvxCRV, bribes, etc.)
+     * @return tokens Array of reward token addresses
+     * @return amounts Array of amounts claimed
+     */
+    function claimAllRewards() external onlyKeeper whenNotPaused nonReentrant returns (address[] memory tokens, uint256[] memory amounts) {
+        if (address(cvxLocker) == address(0)) revert IErrors.ZeroAddress();
+
+        // Get claimable rewards
+        ICvxLocker.EarnedData[] memory claimable = cvxLocker.claimableRewards(address(this));
+
+        // Prepare return arrays
+        tokens = new address[](claimable.length);
+        amounts = new uint256[](claimable.length);
+
+        for (uint256 i = 0; i < claimable.length; i++) {
+            tokens[i] = claimable[i].token;
+            amounts[i] = claimable[i].amount;
+        }
+
+        // Claim all rewards
+        cvxLocker.getReward(address(this), false); // stake = false
+
+        emit RewardsClaimed(amounts, tokens);
+    }
+
+    /**
+     * @notice Withdraw expired locks without relocking
+     */
+    function withdrawExpiredLocks() external onlyKeeper nonReentrant {
+        if (address(cvxLocker) == address(0)) revert IErrors.ZeroAddress();
+
+        cvxLocker.withdrawExpiredLocksTo(address(this));
+    }
+
+    /**
+     * @notice Get locked balance information
+     * @return total Total locked balance (including boost)
+     * @return unlockable Amount that can be unlocked
+     * @return locked Amount currently locked
+     */
+    function getLockedBalances() external view returns (uint256 total, uint256 unlockable, uint256 locked) {
+        if (address(cvxLocker) == address(0)) return (0, 0, 0);
+
+        (total, unlockable, locked,) = cvxLocker.lockedBalances(address(this));
+    }
+
+    /**
+     * @notice Get voting power balance
+     * @return Total vlCVX balance (including boost)
+     */
+    function getVotingPower() external view returns (uint256) {
+        if (address(cvxLocker) == address(0)) return 0;
+        return cvxLocker.balanceOf(address(this));
+    }
+
+    /**
+     * @notice Get claimable rewards
+     * @return claimable Array of claimable reward data
+     */
+    function getClaimableRewards() external view returns (ICvxLocker.EarnedData[] memory claimable) {
+        if (address(cvxLocker) == address(0)) {
+            return new ICvxLocker.EarnedData[](0);
+        }
+        return cvxLocker.claimableRewards(address(this));
     }
 
     // -----------------------------------------------------------------------
