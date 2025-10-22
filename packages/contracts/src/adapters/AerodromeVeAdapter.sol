@@ -35,12 +35,6 @@ interface ISwapRouterV3 {
     function exactInput(ExactInputParams calldata params) external payable returns (uint256);
 }
 
-/// @title AerodromeVeAdapter (extended swap-enabled v2 with NFT support)
-/// @notice Swaps USDC->AERO on deposit using Uniswap v3, locks to veAERO NFT, supports voting,
-///         unlockPermanent, reset, and extend operations, reports TVL in USDC via RouterGuard oracles.
-contract AerodromeVeAdapter is
-    AccessRoles,
-
 /// @notice Aerodrome VotingEscrow interface for veAERO locking
 /// @dev veAERO is implemented as NFTs, each representing a locked position
 interface IVotingEscrow {
@@ -65,6 +59,15 @@ interface IVotingEscrow {
 
     /// @notice Get owner of veNFT
     function ownerOf(uint256 _tokenId) external view returns (address);
+
+    /// @notice Lock a veNFT permanently
+    function lockPermanent(uint256 _tokenId) external;
+
+    /// @notice Unlock a permanent veNFT
+    function unlockPermanent(uint256 _tokenId) external;
+
+    /// @notice Merge two veNFTs
+    function merge(uint256 _from, uint256 _to) external;
 }
 
 /// @notice Aerodrome Voter interface for gauge voting
@@ -77,6 +80,9 @@ interface IVoter {
 
     /// @notice Claim bribes for voted gauges
     function claimBribes(address[] calldata _bribes, address[][] calldata _tokens, uint256 _tokenId) external;
+
+    /// @notice Claim fees for voted gauges
+    function claimFees(address[] calldata _fees, address[][] calldata _tokens, uint256 _tokenId) external;
 }
 
 /// @notice Aerodrome RewardsDistributor for claiming rebase rewards
@@ -85,9 +91,9 @@ interface IRewardsDistributor {
     function claim(uint256 _tokenId) external returns (uint256);
 }
 
-/// @title AerodromeVeAdapter (extended swap-enabled v2)
-/// @notice Swaps USDC->AERO on deposit using Uniswap v3, locks to veAERO (NFT-based voting escrow),
-///         reports TVL in USDC via RouterGuard oracles, votes on gauges, and harvests rebase + bribe rewards.
+/// @title AerodromeVeAdapter (extended swap-enabled v2 with NFT support)
+/// @notice Swaps USDC->AERO on deposit using Uniswap v3, locks to veAERO NFT, supports voting,
+///         unlockPermanent, reset, and extend operations, reports TVL in USDC via RouterGuard oracles.
 contract AerodromeVeAdapter is
     AccessRoles,
     ReentrancyGuard,
@@ -108,13 +114,6 @@ contract AerodromeVeAdapter is
     address       public harvester;    // allowed caller for harvest()
     address       public voterRouter;  // allowed caller for vote()
 
-    // Aerodrome protocol contracts
-    IAerodromeVotingEscrow public votingEscrow; // veAERO NFT contract
-    IAerodromeVoter        public voter;        // Aerodrome voter for gauge voting
-
-    // NFT state
-    uint256 public veNftTokenId;       // The veAERO NFT token ID owned by this adapter
-    bool    public isPermanentLock;    // Whether the lock is permanent
     // Aerodrome Protocol Contracts (Base mainnet addresses)
     IVotingEscrow public votingEscrow;     // veAERO locking contract
     IVoter public voter;                    // Gauge voting contract
@@ -123,6 +122,7 @@ contract AerodromeVeAdapter is
     // veAERO NFT State
     uint256 public veNftTokenId;           // Our veAERO NFT token ID (0 = no lock yet)
     uint256 public lockDuration = 365 days; // Default lock duration (max = 4 years)
+    bool    public isPermanentLock;        // Whether the lock is permanent
 
     // Routing config for deposits (USDC -> AERO) and exits (AERO -> USDC)
     bytes  public depositPath;         // if set, use exactInput(path)
@@ -139,7 +139,6 @@ contract AerodromeVeAdapter is
     event ExitRouteSet(bytes path, uint24 fee);
     event IdleConverted(uint256 usdcIn, uint256 aeroOut);
     event AeroSold(uint256 aeroIn, uint256 usdcOut);
-    event AerodromeContractsSet(address indexed votingEscrow, address indexed voter);
     event VeNftCreated(uint256 indexed tokenId, uint256 amount, uint256 duration);
     event VeNftIncreased(uint256 indexed tokenId, uint256 amount);
     event VeNftLockExtended(uint256 indexed tokenId, uint256 newDuration);
@@ -153,7 +152,7 @@ contract AerodromeVeAdapter is
     event LockIncreased(uint256 indexed tokenId, uint256 additionalAmount);
     event LockExtended(uint256 indexed tokenId, uint256 newUnlockTime);
     event RewardsClaimed(uint256 rebaseAmount, uint256 totalUsdcValue);
-    event AerodromContractsSet(address votingEscrow, address voter, address rewardsDistributor);
+    event AerodromeContractsSet(address votingEscrow, address voter, address rewardsDistributor);
     event LockDurationSet(uint256 oldDuration, uint256 newDuration);
 
     constructor(
@@ -208,10 +207,6 @@ contract AerodromeVeAdapter is
         emit GuardSet(old, newGuard);
     }
 
-    function setAerodromeContracts(address votingEscrow_, address voter_) external onlyGovernor {
-        if (votingEscrow_ != address(0)) votingEscrow = IAerodromeVotingEscrow(votingEscrow_);
-        if (voter_ != address(0)) voter = IAerodromeVoter(voter_);
-        emit AerodromeContractsSet(votingEscrow_, voter_);
     /// @notice Set Aerodrome protocol contracts for veAERO locking and voting
     function setAerodromeContracts(
         address votingEscrow_,
@@ -221,7 +216,7 @@ contract AerodromeVeAdapter is
         if (votingEscrow_ != address(0)) votingEscrow = IVotingEscrow(votingEscrow_);
         if (voter_ != address(0)) voter = IVoter(voter_);
         if (rewardsDistributor_ != address(0)) rewardsDistributor = IRewardsDistributor(rewardsDistributor_);
-        emit AerodromContractsSet(votingEscrow_, voter_, rewardsDistributor_);
+        emit AerodromeContractsSet(votingEscrow_, voter_, rewardsDistributor_);
     }
 
     /// @notice Set lock duration for new veAERO locks (between 1 week and 4 years)
@@ -452,24 +447,31 @@ contract AerodromeVeAdapter is
     function lockedUntil() external view override returns (uint256) {
         // Permanent locks return max timestamp
         if (isPermanentLock) return type(uint256).max;
-        // For time-locked positions, would need to query the VotingEscrow contract
-        // This is a simplified implementation
-        return 0;
+
+        if (veNftTokenId == 0 || address(votingEscrow) == address(0)) return 0;
+
+        try votingEscrow.locked(veNftTokenId) returns (int128, uint256 unlockTime) {
+            return unlockTime;
+        } catch {
+            return 0;
+        }
     }
 
     /*--------------------------- IVotingAdapter ------------------------*/
 
-    /// @notice Vote on Aerodrome gauges using the veAERO NFT
-    /// @param pools Array of pool addresses to vote for
-    /// @param weights Array of weights (must sum to <= 100%)
-    function vote(address[] calldata pools, uint256[] calldata weights) external override {
+    /// @notice Vote on Aerodrome gauges with veAERO voting power
+    /// @param gauges Array of pool addresses to vote for
+    /// @param weights Array of weights (bps, should sum to 10000)
+    function vote(address[] calldata gauges, uint256[] calldata weights) external override {
         if (msg.sender != voterRouter && msg.sender != keeper) revert IErrors.Unauthorized();
-        if (pools.length != weights.length) revert IErrors.InvalidAmount();
-        if (address(voter) == address(0)) revert IErrors.ZeroAddress();
-        if (veNftTokenId == 0) revert IErrors.InvalidAmount();
+        if (gauges.length != weights.length) revert IErrors.InvalidAmount();
+        if (veNftTokenId == 0) return; // No veNFT yet, nothing to vote with
 
-        voter.vote(veNftTokenId, pools, weights);
-        emit VoteCast(veNftTokenId, pools, weights);
+        // Vote on Aerodrome gauges if voter contract is configured
+        if (address(voter) != address(0)) {
+            voter.vote(veNftTokenId, gauges, weights);
+            emit VoteCast(veNftTokenId, gauges, weights);
+        }
     }
 
     /*------------------------- veAERO NFT Operations -------------------*/
@@ -607,31 +609,6 @@ contract AerodromeVeAdapter is
 
         votingEscrow.withdraw(veNftTokenId);
         veNftTokenId = 0;
-    /// @notice Vote on Aerodrome gauges with veAERO voting power
-    /// @param gauges Array of pool addresses to vote for
-    /// @param weights Array of weights (bps, should sum to 10000)
-    function vote(address[] calldata gauges, uint256[] calldata weights) external override {
-        if (msg.sender != voterRouter && msg.sender != keeper) revert IErrors.Unauthorized();
-        if (gauges.length != weights.length) revert IErrors.InvalidAmount();
-        if (veNftTokenId == 0) return; // No veNFT yet, nothing to vote with
-
-        // Vote on Aerodrome gauges if voter contract is configured
-        if (address(voter) != address(0)) {
-            voter.vote(veNftTokenId, gauges, weights);
-        }
-    }
-
-    /*--------------------------- ILockingAdapter -----------------------*/
-
-    /// @notice Get the unlock time for our veAERO lock
-    function lockedUntil() external view override returns (uint256) {
-        if (veNftTokenId == 0 || address(votingEscrow) == address(0)) return 0;
-
-        try votingEscrow.locked(veNftTokenId) returns (int128, uint256 unlockTime) {
-            return unlockTime;
-        } catch {
-            return 0;
-        }
     }
 
     /*--------------------------- Keeper helpers ------------------------*/

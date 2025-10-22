@@ -82,7 +82,6 @@ interface ILayerZeroReceiver {
  */
 contract LayerZeroBridgeAdapter is
     AccessRoles,
-
     ReentrancyGuard,
     IBridgeAdapter,
     ILayerZeroReceiver
