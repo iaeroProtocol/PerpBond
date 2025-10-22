@@ -30,11 +30,10 @@ import "./IVotingAdapter.sol";
  */
 contract VlCvxAdapter is
     AccessRoles,
-    
     ReentrancyGuard,
     IStrategyAdapter,
-    ILockingAdapter,
-    IVotingAdapter
+    IVotingAdapter,
+    ILockingAdapter
 {
     using SafeTransferLib for IERC20;
 

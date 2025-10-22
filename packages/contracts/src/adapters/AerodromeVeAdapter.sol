@@ -83,7 +83,6 @@ interface IRewardsDistributor {
 ///         reports TVL in USDC via RouterGuard oracles, votes on gauges, and harvests rebase + bribe rewards.
 contract AerodromeVeAdapter is
     AccessRoles,
-
     ReentrancyGuard,
     IStrategyAdapter,
     IVotingAdapter,
